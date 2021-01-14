@@ -17,7 +17,7 @@ on:
   pull_request:
 
 env:
-  TERMINUSDB_STORE_PROLOG_VERSION: v0.13.5
+  TERMINUSDB_STORE_PROLOG_VERSION: v0.14.3
 
 jobs:
   test_and_push_docker:
@@ -25,21 +25,21 @@ jobs:
 
     env:
       IMAGE_NAME: terminusdb/terminusdb-server
-      DOCKER_ENVS: "-e TERMINUSDB_SERVER_JWT_PUBLIC_KEY_PATH=test/public_key_test.key.pub -e TERMINUSDB_SERVER_JWT_PUBLIC_KEY_ID=testkey -e TERMINUSDB_HTTPS_ENABLED=false --name terminusdb"
+      DOCKER_ENVS: "-e TERMINUSDB_SERVER_JWT_PUBLIC_KEY_PATH=src/test/public_key_test.key.pub -e TERMINUSDB_SERVER_JWT_PUBLIC_KEY_ID=testkey -e TERMINUSDB_HTTPS_ENABLED=false --name terminusdb"
 
 
     steps:
       - uses: actions/checkout@v2
 
       - name: Build image
-        run: docker build . --file Dockerfile --tag $IMAGE_NAME
+        run: docker build . --file Dockerfile --tag $IMAGE_NAME:local
 
       - name: Run tests
-        run: docker run $DOCKERENVS terminusdb/terminusdb-server:latest bash -c "swipl -g halt /app/terminusdb/start.pl store init --key root && swipl -g run_tests -g halt /app/terminusdb/start.pl -O"
+        run: docker run $DOCKERENVS terminusdb/terminusdb-server:local bash -c "/app/terminusdb/terminusdb test"
 
       - name: Copy binary to local filesystem
         run: |
-          id=$(docker create terminusdb/terminusdb-server)
+          id=$(docker create terminusdb/terminusdb-server:local)
           docker cp $id:/app/terminusdb/terminusdb terminusdb
           docker rm -v $id
 
@@ -68,7 +68,7 @@ jobs:
           echo IMAGE_ID=$IMAGE_ID
           echo VERSION=$VERSION
 
-          docker tag $IMAGE_NAME $IMAGE_ID:$VERSION
+          docker tag $IMAGE_NAME:local $IMAGE_ID:$VERSION
           docker push $IMAGE_ID:$VERSION
 
   fedora_bin:
@@ -180,14 +180,26 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
+    - name: Get SWI Prolog package hash
+      run: Invoke-WebRequest -Uri "https://raw.githubusercontent.com/brunoyb/chocolatey-packages/master/swi-prolog/swi-prolog.nuspec" -OutFile package
+
+    - name: Cache multiple paths
+      id: cache_windows_swipl
+      uses: actions/cache@v2
+      with:
+        path: |
+          C:\Program Files\swipl
+        key: swi-windows-${{ hashFiles('./package') }}
+
     - name: Install SWI Prolog
+      if: steps.cache_windows_swipl.outputs.cache-hit != 'true'
       run: choco install swi-prolog
 
     - name: Download Windows requirements
       run: |
         $SWI_INSTALL_DIR="C:\Program Files\swipl"
-        cd "$SWI_INSTALL_DIR"
-        ls
+        mkdir swipl
+        cd swipl
         mkdir pack && cd pack
         git clone https://github.com/terminusdb/terminus_store_prolog.git
         cd terminus_store_prolog
@@ -195,9 +207,7 @@ jobs:
         md lib/x64-win64 -ea 0
         Invoke-WebRequest -Uri "https://github.com/terminusdb/terminus_store_prolog/releases/download/$env:TERMINUSDB_STORE_PROLOG_VERSION/libterminus_store.dll" -OutFile lib/x64-win64/libterminus_store.dll
         cd "$env:GITHUB_WORKSPACE"
-        mkdir swipl
         xcopy /E /q "$SWI_INSTALL_DIR" swipl\
-        cd swipl\bin
 
     - name: Package windows tar
       run: |
@@ -205,8 +215,8 @@ jobs:
 
     - name: Run tests
       run: |
-        swipl\bin\swipl -g halt start.pl store init --key root
-        swipl\bin\swipl -g run_tests -g halt start.pl
+        $env:TERMINUSDB_SERVER_PACK_DIR="swipl\pack"
+        swipl\bin\swipl src/start.pl test
 
     - name: Archive production artifacts
       uses: actions/upload-artifact@v1
@@ -255,10 +265,10 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Use Node.js 12
+    - name: Use Node.js 14
       uses: actions/setup-node@v1
       with:
-        node-version: 12
+        node-version: 14
 
     - run: npm install
 
@@ -289,24 +299,47 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Use Node.js 12
+    - name: Use Node.js 14
       uses: actions/setup-node@v1
       with:
-        node-version: 12
+        node-version: 14
+
+    - name: Cache node modules on Mac
+      uses: actions/cache@v2
+      env:
+        cache-name: cache-node-modules
+      with:
+        # npm cache files are stored in `~/.npm` on Linux/macOS
+        path: ~/.npm
+        key: ${{ runner.os }}-build-terminusdb-desktop-${{ hashFiles('**/package-lock.json') }}
 
     - run: npm install
 
-    - name: Compile DMG
+    - name: Install terminusdb-store-prolog
       run: |
         TAG=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
-        bash build_mac_os.sh "$TERMINUSDB_STORE_PROLOG_VERSION" "$TAG"
+        bash ../mac/install_terminusdb_store_prolog.sh "$TERMINUSDB_STORE_PROLOG_VERSION" "$TAG"
+
+    - name: Cache SWI Prolog on Mac
+      id: cache_mac_swipl
+      uses: actions/cache@v2
+      with:
+        path: distribution/desktop/public/SWI-Prolog.app
+        key: ${{ runner.os }}-swipl2-terminusdb-desktop-${{ hashFiles('distribution/desktop/public/pack/terminus_store_prolog/.ci/install_swipl_dmg.sh') }}
+
+    - name: Install SWI Prolog if cache does not hit
+      if: steps.cache_mac_swipl.outputs.cache-hit != 'true'
+      run: bash ../mac/install_swipl.sh
+
+    - name: Compile dmg
+      run: |
+        npm run build-mac-os
         mv dist/*.dmg dist/terminusdb-desktop.dmg
 
     - name: Run tests
       run: |
         export TERMINUSDB_SERVER_PACK_DIR=./public/pack
-        public/SWI-Prolog.app/Contents/MacOS/swipl -g halt public/terminusdb-server/start.pl store init --key root
-        public/SWI-Prolog.app/Contents/MacOS/swipl -g run_tests -g halt public/terminusdb-server/start.pl
+        public/SWI-Prolog.app/Contents/MacOS/swipl public/terminusdb-server/src/start.pl test
 
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v2.1.4
@@ -361,3 +394,4 @@ jobs:
           terminusdb-desktop.dmg/terminusdb-desktop.dmg
           terminusdb-linux-amd64
           terminusdb-deb/terminusdb*.deb
+          terminusdb-rpm/terminusdb*.rpm
