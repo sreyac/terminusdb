@@ -48,6 +48,7 @@
 :- use_module(core(validation)).
 :- use_module(core(transaction)).
 
+:- use_module(library(http/json)).
 
 :- use_module(library(apply)).
 :- use_module(library(yall)).
@@ -770,6 +771,7 @@ realiser(Elt,Frame,Database,Depth,['@type'=Class,
                                    '@id'=Elt
                                    |Realisers]) :-
     instance_class(Elt,Class,Database),
+    !,
     realise_frame(Elt,Frame,Database,Depth,Realisers).
 
 /*
@@ -819,11 +821,11 @@ realise_frame(Elt,[[type=restriction|_R]|Rest],Database,Depth,Realisers) :-
     % We are a bare restriction, not applied to any property
     !,
     realise_frame(Elt,Rest,Database,Depth,Realisers).
-realise_frame(Elt,[[type=class_choice,operands=_]|Rest],Database,Depth,[Realiser|Realisers]) :-
+realise_frame(Elt,[type=class_choice,operands=_],Database,Depth,Realiser) :-
     % We are a bare class_choice, not applied to any property
     !,
-    document_object(Database,Elt,Depth,Realiser),
-    realise_frame(Elt,Rest,Database,Depth,Realisers).
+    document_object(Database,Elt,Depth,Object),
+    Object = [_Type,_Id|Realiser].
 realise_frame(Elt,Frame,Database,Depth,Realisers) :-
     % We should be able to assume correctness of operator here...
     % member(type=Type, Frame),
@@ -834,14 +836,14 @@ realise_frame(Elt,Frame,Database,Depth,Realisers) :-
 realise_frame(_Elt,F,_Database,_Depth,[]) :-
     memberchk(type=bareClass, F),
     !.
-realise_frame(Elt,F,Database,Depth,New_Realiser) :-
+realise_frame(Elt,F,Database,Depth,Realiser) :-
     memberchk(type=clippedClass, F),
     !,
     % Don't increase depth
     % NOTE: very dodgy unless we are checking to make sure
     % we aren't following a cycle!  We should check the realiser.
     document_object(Database,Elt,Depth,Object),
-    Object = [_Type,_Id|New_Realiser].
+    Object = [_Type,_Id|Realiser].
 realise_frame(_Elt,F,_Database,_Depth,[]) :-
     memberchk(type=oneOf, F),
     !.
@@ -1002,12 +1004,10 @@ realise_quads(Elt,[[type=restriction|_R]|Rest],Database,Realiser) :-
     % We are a bare restriction, not applied to any property
     !,
     realise_quads(Elt,Rest,Database,Realiser).
-realise_quads(Elt,[[type=class_choice,operands=_]|Rest],Database,Realiser) :-
+realise_quads(Elt,[type=class_choice,operands=_],Database,Realiser) :-
     % We are a bare class choice, not applied to any property
     !,
-    object_edges(Elt,Database,Edges),
-    realise_quads(Elt,Rest,Database,Realiser_Tail),
-    append(Edges,Realiser_Tail,Realiser).
+    object_edges(Elt,Database,Realiser).
 realise_quads(Elt,Frame,Database,Realisers) :-
     % We should be able to assume correctness of operator here...
     % member(type=Type, Frame),
@@ -1034,10 +1034,9 @@ realise_quads(_Elt,F,_Database,[]) :-
  * Document
  */
 document_object(DB, Document, Depth, Realiser) :-
-
     most_specific_type(Document,Class,DB),
     class_frame(Class,DB,Frame),
-
+    debug(frame, "Class Frame: ~q~n", [Frame]),
     % TODO: There really should not be epic loads of
     % choice points placed by realiser, but apparently
     % there are...
@@ -1065,6 +1064,7 @@ document_jsonld(Query_Context, Document, Depth, JSON_LD) :-
     query_default_collection(Query_Context, Collection),
     prefix_expand(Document,Prefixes,Document_Ex),
     document_object(Collection, Document_Ex, Depth, Realiser),
+    debug(frame,"Realiser: ~q~n",[Realiser]),
     term_jsonld(Realiser, JSON_Ex),
     compress(JSON_Ex,Prefixes,JSON_LD).
 
@@ -1116,7 +1116,7 @@ object_references(URI,Database,Edges) :-
                 ->  get_dict(descriptor,G,G_Desc)
                 ;   G = inferred
                 ->  G = G_Desc
-                ;   throw(error(unexpected_graph_object(G, context(realise_quads/4, _)))))),
+                ;   throw(error(unexpected_graph_object(G, _))))),
             Edges).
 
 /*
@@ -1175,7 +1175,13 @@ insert_edges([(G_Desc,X,Y,Z)|Edges], Transaction_Objects) :-
 
 type_to_type_word(Type, Type_Word) :-
     pattern_string_split('#', Type, Segments),
-    append(_, [Type_Word], Segments).
+    append([_|_], [Type_Word], Segments),
+    !.
+type_to_type_word(Type, Type_Word) :-
+    pattern_string_split('/', Type, Segments),
+    append([_|_], [Type_Word], Segments),
+    !.
+type_to_type_word(Type, Type).
 
 /*
  * update_object(Obj:dict,Query_Context) is det.
@@ -1187,13 +1193,51 @@ type_to_type_word(Type, Type_Word) :-
  * Deletes := triples(New) / triples(New)
  */
 update_object(Obj, Query_Context) :-
-    (   jsonld_id(Obj,ID)
-    ->  true
-    ;   jsonld_type(Obj, Full_Type),
-        type_to_type_word(Full_Type, Type),
-        get_dict(doc, Query_Context.prefixes, Doc_Prefix),
-        random_idgen(Doc_Prefix, [Type], ID)),
-    update_object(ID,Obj,Query_Context).
+    get_dict(prefixes,Query_Context,Prefixes),
+    autogenerate_ids(Obj,Prefixes,New_Obj),
+    jsonld_id(New_Obj,ID),
+    update_object(ID,New_Obj,Query_Context).
+
+/*
+ * autogenerate_ids(Obj, Obj_With_Ids) is det.
+ *
+ * Add ids wherever they do not exist by creating a
+ * hash of the subobject.
+ */
+autogenerate_ids(Obj, _, Obj) :-
+    is_dict(Obj),
+    % if we are a value we must have no id.
+    get_dict('@value', Obj, _),
+    !.
+autogenerate_ids(Obj, Prefixes, Obj_With_Ids) :-
+    is_dict(Obj),
+    !,
+
+    dict_pairs(Obj, _, Pairs),
+    exclude(['@context'-_]>>true, Pairs, Filtered_Pairs),
+    maplist(
+        {Prefixes}/[Key-Value, Key-IDed_Value]>>(
+            autogenerate_ids(Value, Prefixes, IDed_Value)
+        ),
+        Filtered_Pairs, New_Pairs),
+    dict_pairs(New_Obj, _, New_Pairs),
+
+    ensure_id(New_Obj, Prefixes, Obj_With_Ids).
+autogenerate_ids(Obj, _, Obj).
+
+ensure_id(Obj, _, Obj) :-
+    jsonld_id(Obj, _),
+    !.
+ensure_id(Obj, Prefixes, Obj_With_Ids) :-
+    atom_json_dict(JSON, Obj, [as(atom)]),
+    md5_hash(JSON, Hash, []),
+    get_dict(doc, Prefixes, Doc_Prefix),
+    jsonld_type(Obj, Type),
+    type_to_type_word(Type, Type_Word),
+    atomic_list_concat([Doc_Prefix, Type_Word], Base),
+    idgen(Base, [Hash], ID),
+    put_dict(Obj, _{'@id' : ID}, Obj_With_Ids).
+
 
 /*
  * update_object(ID:url,Obj:dict,Query_Context) is det.
@@ -1389,5 +1433,58 @@ test(loopy_object, [
                      class='http://example.com/data/worldOntology#Foo'],
               restriction=true]].
 
+:- use_module(core(api/api_woql)).
+test(woql_object, [
+         setup((setup_temp_store(State),
+                create_db_with_ttl_schema("admin", "woql", "/terminus-schema/woql.owl.ttl"))),
+         cleanup(teardown_temp_store(State))
+     ])
+:-
+    % query = WQ().update_object(WQ().triple("v:X", "v:Y", "v:Z").to_dict())
+    Insert_Query = '{"@type": "woql:UpdateObject", "woql:document": {"@type": "woql:Triple", "woql:subject": {"@type": "woql:Variable", "woql:variable_name": {"@value": "X", "@type": "xsd:string"}}, "woql:predicate": {"@type": "woql:Variable", "woql:variable_name": {"@value": "Y", "@type": "xsd:string"}}, "woql:object": {"@type": "woql:Variable", "woql:variable_name": {"@value": "Z", "@type": "xsd:string"}}}}',
+
+    atom_json_dict(Insert_Query, Insert_JSON, []),
+
+    super_user_authority(Auth),
+    woql_query_json(system_descriptor{}, Auth, some("admin/woql"), Insert_JSON,
+                    _{author : me, message: yo},
+                    [],
+                    true,
+                    Insert_Response),
+    Insert_Response = _{'@type':'api:WoqlResponse',
+                        'api:status':'api:success',
+                        'api:variable_names':[],
+                        bindings:[_{}],
+                        deletes:0,
+                        inserts:10,
+                        transaction_retry_count:0},
+
+    Get_Query = '{"@type": "woql:ReadObject", "woql:document_uri" : "doc:Triple_b975f26907b64367c87013ff3f772286", "woql:document": {"@type": "woql:Variable", "woql:variable_name": {"@value": "X", "@type": "xsd:string"}}}',
+    atom_json_dict(Get_Query, Get_JSON, []),
+    woql_query_json(system_descriptor{}, Auth, some("admin/woql"), Get_JSON,
+                    _{author : me, message: yo},
+                    [],
+                    true,
+                    Get_Response),
+
+    [Binding] = (Get_Response.bindings),
+
+    % Name underscore variables due to bug in compilation on swip 8.2.3
+    _V0{ 'X':_V1{'@context': _A,
+             '@id':_B,
+             '@type':'woql:Triple',
+             'woql:object':_V2{'@id':_C,
+                             '@type':'woql:Variable',
+                             'woql:variable_name':_V3{'@type':'xsd:string',
+                                                    '@value':"Z"}},
+             'woql:predicate':_V4{'@id':_D,
+                                '@type':'woql:Variable',
+                                'woql:variable_name':_V5{'@type':'xsd:string',
+                                                       '@value':"Y"}},
+             'woql:subject':_V7{'@id':_E,
+                              '@type':'woql:Variable',
+                              'woql:variable_name':_V6{'@type':'xsd:string',
+                                                     '@value':"X"}}}
+     } :< Binding.
 
 :- end_tests(documents).

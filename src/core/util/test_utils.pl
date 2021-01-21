@@ -17,6 +17,7 @@
               create_db_with_test_schema/2,
               create_db_without_schema/2,
               create_db_with_empty_schema/2,
+              create_db_with_ttl_schema/3,
               create_public_db_without_schema/2,
               print_all_triples/1,
               print_all_triples/2,
@@ -255,6 +256,25 @@ create_db_with_test_schema(Organization, Db_Name) :-
     Commit_Info = commit_info{author: "test", message: "add test schema"},
     graph_update(system_descriptor{}, Auth, Graph, Commit_Info, "turtle", TTL).
 
+create_db_with_ttl_schema(Organization, Db_Name, TTL_Schema) :-
+    Prefixes = _{ doc  : 'system://worldOnt/document/',
+                  scm : 'http://example.com/data/worldOntology#'},
+
+    open_descriptor(system_descriptor{}, System),
+    super_user_authority(Admin),
+    create_db(System, Admin, Organization, Db_Name, "test", "a test db", false, true, Prefixes),
+
+    terminus_path(Path),
+    interpolate([Path, TTL_Schema], TTL_File),
+    read_file_to_string(TTL_File, TTL, []),
+
+    atomic_list_concat([Organization, '/', Db_Name,
+                        '/local/branch/main/schema/main'],
+                       Graph),
+    super_user_authority(Auth),
+    Commit_Info = commit_info{author: "test", message: "add test schema"},
+    graph_update(system_descriptor{}, Auth, Graph, Commit_Info, "turtle", TTL).
+
 create_db_without_schema(Organization, Db_Name) :-
     Prefixes = _{ doc : 'http://somewhere.for.now/document/',
                   scm : 'http://somewhere.for.now/schema#' },
@@ -414,6 +434,7 @@ spawn_server_1(Path, URL, PID, Options) :-
                          'TERMINUSDB_SERVER_PACK_DIR',
                          'TERMINUSDB_SERVER_JWT_PUBLIC_KEY_PATH',
                          'TERMINUSDB_SERVER_JWT_PUBLIC_KEY_ID',
+                         'TERMINUSDB_JWT_ENABLED',
                          'TERMINUSDB_SERVER_TMP_PATH'
                      ],
                      Env_List),

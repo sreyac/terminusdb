@@ -47,7 +47,7 @@
 :- use_module(library(http/http_authenticate)).
 
 % Conditional loading of the JWT IO library...
-:- if(\+((config:jwt_public_key_path(Path), Path = ''))).
+:- if(config:jwt_enabled).
 :- use_module(library(jwt_io)).
 :- endif.
 
@@ -77,7 +77,7 @@ connect_handler(get, Request, System_DB, Auth) :-
     reply_json(User_Obj2).
 
 :- begin_tests(jwt_auth, [
-                   condition(getenv("TERMINUSDB_SERVER_JWT_PUBLIC_KEY_ID", testkey))
+                   condition(config:jwt_enabled)
                ]
               ).
 
@@ -4131,7 +4131,7 @@ fetch_authorization_data(Request, Username, KS) :-
     http_authorization_data(Text, basic(Username, Key)),
     coerce_literal_string(Key, KS).
 
-:- if(\+((config:jwt_public_key_path(Path), Path = ''))).
+:- if(config:jwt_enabled).
 /*
  *  fetch_jwt_data(+Request, -Username) is semi-determinate.
  *

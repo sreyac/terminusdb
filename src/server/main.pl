@@ -26,19 +26,21 @@
 :- use_module(library(http/http_ssl_plugin)).
 :- use_module(library(http/html_write)).
 
+% Conditional loading of the JWT IO library...
+:- if(config:jwt_enabled).
+:- use_module(library(jwt_io)).
+:- endif.
 
 load_jwt_conditionally :-
-    config:jwt_public_key_path(JWTPubKeyPath),
-    (   JWTPubKeyPath = ''
-    ->  true
-    ;   use_module(library(jwt_io)),
-        config:jwt_public_key_id(Public_Key_Id),
+    (   config:jwt_enabled
+    ->  config:jwt_public_key_id(Public_Key_Id),
+        config:jwt_public_key_path(JWTPubKeyPath),
         set_setting(jwt_io:keys, [_{kid: Public_Key_Id,
                                     type: 'RSA',
                                     algorithm: 'RS256',
-                                    public_key: JWTPubKeyPath}])).
+                                    public_key: JWTPubKeyPath}])
+    ; true).
 
-:- load_jwt_conditionally.
 
 terminus_server(Argv,Wait) :-
     config:server(Server),
@@ -46,6 +48,7 @@ terminus_server(Argv,Wait) :-
     config:worker_amount(Workers),
     config:ssl_cert(CertFile),
     config:ssl_cert_key(CertKeyFile),
+    load_jwt_conditionally,
     (   config:https_enabled
     ->  HTTPOptions = [ssl([certificate_file(CertFile), key_file(CertKeyFile)]),
                         port(Port), workers(Workers)]

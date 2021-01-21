@@ -62,14 +62,14 @@ woql:Datatype
   rdfs:label "Node"@en .
 
 woql:datatype
-  a owl:DatatypeProperty;
+  a owl:DatatypeProperty ;
   rdfs:label "datatype"@en ;
   rdfs:comment "The datatype value of an object of an edge"@en ;
   rdfs:domain woql:Datatype ;
   rdfs:range xsd:anySimpleType .
 
 woql:Value
-  a owl:Class
+  a owl:Class ;
   rdfs:label "Value"@en ;
   rdfs:comment "A boxed datatype, a variable or a node"@en ;
   owl:disjointUnionOf
@@ -507,7 +507,7 @@ woql:AsVar
   rdfs:label "As Var"@en ;
   rdfs:comment "As Var"@en .
 
-owoql:IndexedAsVar
+woql:IndexedAsVar
   a owl:Class ;
   rdfs:subClassOf woql:Indexable, woql:AsVar ;
   rdfs:label "A var by index"@en ;
@@ -525,12 +525,6 @@ woql:var_type
   rdfs:comment "An AsVar casting type"@en ;
   rdfs:domain woql:AsVar ;
   rdfs:range xsd:string .
-
-woql:NamedAsVars
-  a owl:Class
-  rdfs:subClassOf woql:AsVars ;
-  rdfs:label "As Vars by name"@en ;
-  rdfs:comment "As Vars by name"@en .
 
 woql:identifier
   a owl:DatatypeProperty ;
@@ -1458,9 +1452,9 @@ woql:With
 
 woql:TypeOf
   a owl:Class ;
-  rdsf:subClassOf woql:Query, woql:HasValue, woql:HasType ;
+  rdfs:subClassOf woql:Query, woql:HasValue, woql:HasType ;
   rdfs:label "TypeOf"@en ;
-  rdsf:comment "Find the type of a node or literal"@en .
+  rdfs:comment "Find the type of a node or literal"@en .
 
 woql:HasValue
   a owl:Class ;
@@ -1469,9 +1463,9 @@ woql:HasValue
   rdfs:comment "Abstract mixin with a value"@en .
 
 woql:value
+  a owl:ObjectProperty ;
   rdfs:label "value"@en ;
   rdfs:comment "The value associated with a query"@en ;
-  a owl:ObjectProperty ;
   rdfs:domain woql:HasValue ;
   rdfs:range woql:Value .
 
@@ -1482,9 +1476,9 @@ woql:HasType
   rdfs:comment "Abstract mixin with a type"@en .
 
 woql:type
+  a owl:DatatypeProperty ;
   rdfs:label "type"@en ;
   rdfs:comment "The type associated with a query"@en ;
-  a owl:DatatypeProperty ;
   rdfs:domain woql:HasType ;
   rdfs:range xsd:string .
 
